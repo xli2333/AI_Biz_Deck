@@ -46,6 +46,12 @@ const App: React.FC = () => {
   const [status, setStatus] = useState<GenerationState>({ stage: 'idle' });
   const [isExporting, setIsExporting] = useState(false);
   const [isUpscaling, setIsUpscaling] = useState(false);
+  
+  // Global Visual Edit State
+  const [showGlobalVisualEditModal, setShowGlobalVisualEditModal] = useState(false);
+  const [globalVisualEditInstruction, setGlobalVisualEditInstruction] = useState('');
+  const [isGlobalVisualEditing, setIsGlobalVisualEditing] = useState(false);
+
   const [isImportingDeck, setIsImportingDeck] = useState(false);
   const [isPausing, setIsPausing] = useState(false); 
   
@@ -810,6 +816,62 @@ const App: React.FC = () => {
       await generateDeckLoop(0, regenInstructions);
   };
 
+  const handleGlobalVisualEdit = async () => {
+      if (!globalVisualEditInstruction.trim()) return;
+      setShowGlobalVisualEditModal(false);
+      setIsGlobalVisualEditing(true);
+
+      try {
+          // Iterate through all slides
+          for (let i = 0; i < slides.length; i++) {
+              // Only process completed slides that have an image
+              if (slides[i].status === 'complete' && slides[i].imageBase64) {
+                  setCurrentSlideIdx(i); // Focus so user sees progress
+                  updateSlideStatus(i, { status: 'generating_visual', currentStep: 'Applying Global Visual Edit...' });
+                  
+                  // Use existing modify logic
+                  const newImage = await modifySlideImage(slides[i].imageBase64!, globalVisualEditInstruction, consultingStyle, apiKey);
+                  
+                  updateSlideStatus(i, { 
+                      imageBase64: newImage, 
+                      status: 'complete', 
+                      currentStep: undefined,
+                      isHighRes: false // Reset resolution status as it's a new edit
+                  });
+              }
+          }
+          setGlobalVisualEditInstruction('');
+      } catch (e) {
+          alert("Global Visual Edit failed: " + (e as Error).message);
+      } finally {
+          setIsGlobalVisualEditing(false);
+      }
+  };
+
+  const handleSingleSlideUpscale = async () => {
+      const currentSlide = slides[currentSlideIdx];
+      if (!currentSlide.imageBase64) return;
+      
+      // Use local status update instead of global isUpscaling to allow other interactions if needed, 
+      // though blocking is safer.
+      updateSlideStatus(currentSlideIdx, { status: 'upscaling', currentStep: 'Enhancing Resolution (4K)...' });
+      
+      try {
+          const prompt = currentSlide.visualSpecification.fullImagePrompt;
+          const visual4k = await upscaleSlideImage(currentSlide.imageBase64!, prompt, consultingStyle, apiKey);
+          
+          updateSlideStatus(currentSlideIdx, { 
+              imageBase64: visual4k, 
+              status: 'complete', 
+              isHighRes: true, 
+              currentStep: undefined 
+          });
+      } catch (e) {
+          alert("Upscale failed: " + (e as Error).message);
+          updateSlideStatus(currentSlideIdx, { status: 'complete', currentStep: undefined });
+      }
+  };
+
   const handleExportPDF = () => {
       if (slides.length === 0) return;
       setIsExporting(true);
@@ -1155,6 +1217,31 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {showGlobalVisualEditModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+             <div className="bg-white max-w-lg w-full shadow-2xl border-l-8 border-purple-600 p-8 flex flex-col gap-6 relative">
+                 <button onClick={() => setShowGlobalVisualEditModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+                 <div>
+                    <h3 className="text-3xl font-bold text-[#051C2C] font-serif mb-2 flex items-center gap-3"><Paintbrush className="w-8 h-8 text-purple-600" />Global Visual Edit</h3>
+                </div>
+                <div className="flex flex-col gap-3">
+                    <label className="text-xs font-bold text-purple-600 uppercase tracking-widest flex items-center gap-2"><Sparkles className="w-3 h-3" />Edit Instruction (Applied to ALL slides)</label>
+                    <textarea 
+                        value={globalVisualEditInstruction}
+                        onChange={(e) => setGlobalVisualEditInstruction(e.target.value)}
+                        placeholder="e.g., 'Change the background to dark blue', 'Make all charts green', 'Remove the footer'..."
+                        className="w-full h-40 p-4 bg-purple-50/50 border-2 border-purple-100 text-sm focus:border-purple-600 focus:bg-white focus:outline-none resize-none rounded-sm"
+                        autoFocus
+                    />
+                </div>
+                <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
+                    <button onClick={() => setShowGlobalVisualEditModal(false)} className="px-6 py-3 border border-gray-300 text-gray-600 font-bold text-xs uppercase tracking-widest hover:bg-gray-50">Cancel</button>
+                    <button onClick={handleGlobalVisualEdit} disabled={!globalVisualEditInstruction.trim()} className="px-6 py-3 bg-purple-600 text-white font-bold text-xs uppercase tracking-widest hover:bg-purple-800 flex items-center gap-2 disabled:opacity-50">Apply to All</button>
+                </div>
+             </div>
+        </div>
+      )}
+
       {showBuildConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-white max-w-lg w-full shadow-2xl border border-gray-200 p-8 flex flex-col gap-6">
@@ -1208,21 +1295,25 @@ const App: React.FC = () => {
                 </div>
             )}
 
-             {(status.stage === 'finished' || status.stage === 'paused') && (
-                <>
-                {status.stage !== 'paused' && (
-                    <button onClick={() => { setRegenInstructions(''); setShowRegenerateModal(true); }} disabled={isExporting || isUpscaling} className="bg-[#163E93] hover:bg-[#051C2C] text-white px-4 py-3 rounded-none font-bold text-xs uppercase tracking-[0.15em] flex items-center gap-2 transition-all disabled:opacity-50 shadow-md mr-2">
-                        <RefreshCw className="w-4 h-4" /> Director's Cut
-                    </button>
-                )}
-
-                <button onClick={handleUpscaleDeck} disabled={isUpscaling || isExporting || status.stage === 'paused'} className="bg-white text-[#163E93] border border-[#163E93] hover:bg-blue-50 px-6 py-3 rounded-none font-bold text-xs uppercase tracking-[0.15em] shadow-sm flex items-center gap-3 transition-all disabled:opacity-50">
-                    {isUpscaling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Monitor className="w-4 h-4" />} {isUpscaling ? 'Upscaling...' : 'Upscale (4K)'}
-                </button>
-                <button onClick={handleExportPDF} disabled={isExporting || isUpscaling || status.stage === 'paused'} className="bg-[#051C2C] hover:bg-black text-white px-8 py-3 rounded-none font-bold text-xs uppercase tracking-[0.15em] shadow-lg flex items-center gap-3 transition-all disabled:opacity-50">
-                    {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} {isExporting ? 'Exporting...' : 'Export PDF'}
-                </button>
-                </>
+                             {(status.stage === 'finished' || status.stage === 'paused') && (
+                             <>
+                             {status.stage !== 'paused' && (
+                                 <div className="flex gap-2 mr-2">
+                                     <button onClick={() => { setRegenInstructions(''); setShowRegenerateModal(true); }} disabled={isExporting || isUpscaling || isGlobalVisualEditing} className="bg-[#163E93] hover:bg-[#051C2C] text-white px-4 py-3 rounded-none font-bold text-xs uppercase tracking-[0.15em] flex items-center gap-2 transition-all disabled:opacity-50 shadow-md">
+                                         <RefreshCw className="w-4 h-4" /> Director's Cut
+                                     </button>
+                                     <button onClick={() => { setGlobalVisualEditInstruction(''); setShowGlobalVisualEditModal(true); }} disabled={isExporting || isUpscaling || isGlobalVisualEditing} className="bg-purple-600 hover:bg-purple-800 text-white px-4 py-3 rounded-none font-bold text-xs uppercase tracking-[0.15em] flex items-center gap-2 transition-all disabled:opacity-50 shadow-md">
+                                         {isGlobalVisualEditing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paintbrush className="w-4 h-4" />} {isGlobalVisualEditing ? 'Applying...' : 'Global Visual Edit'}
+                                     </button>
+                                 </div>
+                             )}
+             
+                             <button onClick={handleUpscaleDeck} disabled={isUpscaling || isExporting || status.stage === 'paused' || isGlobalVisualEditing} className="bg-white text-[#163E93] border border-[#163E93] hover:bg-blue-50 px-6 py-3 rounded-none font-bold text-xs uppercase tracking-[0.15em] shadow-sm flex items-center gap-3 transition-all disabled:opacity-50">
+                                 {isUpscaling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Monitor className="w-4 h-4" />} {isUpscaling ? 'Upscale (4K)' : 'Upscale (4K)'}
+                             </button>
+                             <button onClick={handleExportPDF} disabled={isExporting || isUpscaling || status.stage === 'paused' || isGlobalVisualEditing} className="bg-[#051C2C] hover:bg-black text-white px-8 py-3 rounded-none font-bold text-xs uppercase tracking-[0.15em] shadow-lg flex items-center gap-3 transition-all disabled:opacity-50">
+                                 {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} {isExporting ? 'Exporting...' : 'Export PDF'}
+                             </button>                </>
             )}
         </div>
       </header>
@@ -1417,6 +1508,9 @@ const App: React.FC = () => {
                                     </button>
                                     <button onClick={handleSlideModify} disabled={!slideRefineInput.trim() || isRefiningSlide} className="bg-[#051C2C] hover:bg-[#163E93] text-white px-4 py-2 font-bold text-xs uppercase tracking-wider disabled:opacity-50 transition-colors flex items-center gap-2">
                                         <Paintbrush className="w-3 h-3" /> {isRefiningSlide ? 'Modifying...' : 'Visual Edit'}
+                                    </button>
+                                    <button onClick={handleSingleSlideUpscale} disabled={isRefiningSlide || slides[currentSlideIdx]?.status === 'upscaling'} className="bg-white hover:bg-blue-50 text-[#163E93] border border-[#163E93] px-4 py-2 font-bold text-xs uppercase tracking-wider disabled:opacity-50 transition-colors flex items-center gap-2">
+                                        {slides[currentSlideIdx]?.status === 'upscaling' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Monitor className="w-3 h-3" />} Upscale (4K)
                                     </button>
                                 </div>
                             </div>

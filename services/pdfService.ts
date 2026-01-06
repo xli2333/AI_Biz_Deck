@@ -2,7 +2,7 @@
 import * as pdfjsLib from 'pdfjs-dist';
 
 // Configure worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://aistudiocdn.com/pdfjs-dist@4.0.379/build/pdf.worker.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@4.0.379/build/pdf.worker.min.mjs';
 
 export const extractImagesFromPdf = async (file: File): Promise<string[]> => {
     const arrayBuffer = await file.arrayBuffer();
